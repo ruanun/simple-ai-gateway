@@ -1,0 +1,247 @@
+# tag v* 发布：gitleaks + 全量测试 → 五平台二进制归档 → GHCR / Docker Hub 多架构镜像 → GitHub Release。
+#
+# 发布前需配置的 secrets（Docker Hub 可选，缺失时只推 GHCR）：
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
+#
+# 产物：
+#   saig-<tag>-<os>-<arch>.tar.gz / .zip（内含可执行文件 + README（EN/ZH/JA）+ config.example.yaml + LICENSE）
+#   SHA256SUMS
+#   ghcr.io/<owner>/<repo>:<version> / :latest / :sha-<short>
+#   docker.io/<DOCKERHUB_USERNAME>/<repo>:<version> / :latest / :sha-<short>
+#
+# 公开仓库首次发布后，GHCR package 默认仍是 private：到
+# https://github.com/users/<owner>/packages/container/<repo>/settings 把 visibility 改成 public。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 发布前复扫全历史，避免把带凭证的 tag 发出去。
+  gitleaks:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+
+  # 前端只构建一次，web/dist 作为 artifact 供 verify 与各平台编译复用。
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 前端 lint + 构建
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm test
+          pnpm build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  verify:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Go 静态检查与测试
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Go 漏洞扫描（govulncheck）
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  binaries:
+    needs: [web, verify, gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, archive: tar.gz }
+          - { goos: linux,   goarch: arm64, archive: tar.gz }
+          - { goos: darwin,  goarch: amd64, archive: tar.gz }
+          - { goos: darwin,  goarch: arm64, archive: tar.gz }
+          - { goos: windows, goarch: amd64, archive: zip }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: 交叉编译并打包
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          EXT=""
+          [ "$GOOS" = "windows" ] && EXT=".exe"
+          NAME="saig-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}"
+          BIN="${NAME}${EXT}"
+          PKG=github.com/ruanun/simple-ai-gateway/internal/buildinfo
+          COMMIT=$(echo "${GITHUB_SHA}" | cut -c1-12)
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          go build -trimpath \
+            -ldflags "-s -w -X ${PKG}.Version=${GITHUB_REF_NAME} -X ${PKG}.Commit=${COMMIT} -X ${PKG}.BuildTime=${BUILD_TIME}" \
+            -o "$BIN" ./cmd/server
+
+          mkdir -p "pkg/${NAME}"
+          mv "$BIN" "pkg/${NAME}/"
+          cp README.md README.zh-CN.md README.ja.md config.example.yaml LICENSE "pkg/${NAME}/"
+          if [ "${GOOS}" = "windows" ]; then
+            (cd pkg && zip -r "${NAME}.zip" "${NAME}")
+          else
+            tar -czf "pkg/${NAME}.tar.gz" -C pkg "${NAME}"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          # 只上传压缩包；目录 saig-* 若一并上传，release 作业的 sha256sum 会把它当成文件。
+          path: pkg/saig-*.*
+          retention-days: 7
+
+  docker:
+    needs: [verify, gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write   # 推送 GHCR
+      id-token: write   # buildx SBOM/provenance 证明（Sigstore OIDC）
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 计算镜像列表
+        id: images
+        run: |
+          {
+            echo "images<<EOF"
+            echo "ghcr.io/${GITHUB_REPOSITORY}"
+            if [ -n "${DOCKERHUB_USERNAME}" ]; then
+              echo "docker.io/${DOCKERHUB_USERNAME}/${GITHUB_REPOSITORY#*/}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "${DOCKERHUB_USERNAME}" ]; then
+            echo "::notice::未配置 DOCKERHUB_USERNAME/DOCKERHUB_TOKEN，本次只推送 GHCR"
+          fi
+
+      - name: 构建元数据
+        id: meta
+        run: |
+          echo "commit=$(echo "${GITHUB_SHA}" | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # QEMU 只用于运行阶段 apk add（几秒）；前端与 Go 编译都在原生 amd64 交叉输出。
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v4
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录 Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 生成镜像 tags / labels
+        id: docker-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.images.outputs.images }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=sha,format=short,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=simple-ai-gateway
+            org.opencontainers.image.description=企业级自托管 AI 网关
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+            BUILD_TIME=${{ steps.meta.outputs.built }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+
+  release:
+    needs: [binaries, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # 创建 Release 并上传产物
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*   # 只取二进制归档，排除 web-dist
+          path: dist
+          merge-multiple: true
+
+      - name: 生成校验和
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum saig-*.tar.gz saig-*.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true

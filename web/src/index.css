@@ -1,0 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@theme {
+  --font-sans: 'Fira Sans', system-ui, sans-serif;
+  --font-mono: 'Fira Code', monospace;
+}
+
+:root {
+  --background: #F8FAFC; --foreground: #0F172A;
+  --card: #FFFFFF; --muted: #F1F5F9; --muted-foreground: #64748B;
+  --primary: #1E40AF; --primary-foreground: #FFFFFF;
+  --secondary: #3B82F6; --accent: #D97706;
+  --border: #E2E8F0; --ring: #1E40AF; --destructive: #DC2626;
+  --ok: #16A34A; --warn: #D97706; --down: #DC2626; --info: #2563EB;
+}
+.dark {
+  --background: #0B1220; --foreground: #E2E8F0;
+  --card: #111A2E; --muted: #1E293B; --muted-foreground: #94A3B8;
+  --primary: #3B82F6; --primary-foreground: #FFFFFF;
+  --secondary: #60A5FA; --accent: #F59E0B;
+  --border: #1E293B; --ring: #3B82F6; --destructive: #EF4444;
+  --ok: #22C55E; --warn: #F59E0B; --down: #EF4444; --info: #3B82F6;
+}
+
+/* react-day-picker（Calendar 组件）接入站点主题 */
+.rdp-root {
+  --rdp-accent-color: var(--primary);
+  --rdp-accent-background-color: color-mix(in srgb, var(--primary) 12%, transparent);
+  --rdp-today-color: var(--accent);
+  --rdp-day-width: 2rem; --rdp-day-height: 2rem;
+  font-size: 0.8125rem;
+}
+
+/* 删除按钮：垃圾桶图标常态 muted，悬停所在按钮时才变红，降低表格视觉噪音 */
+button:hover .lucide-trash-2, button:hover .lucide-trash2 { color: var(--destructive); }
+
+* { border-color: var(--border); }
+body { background: var(--background); color: var(--foreground); font-family: var(--font-sans); }
+.tnum { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }

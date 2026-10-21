@@ -1,0 +1,120 @@
+# simple-ai-gateway 配置模板
+#
+# 用法：复制为 config.yaml（或 config.local.yaml，后者已被 .gitignore 忽略），
+# 填好下方三项「必改」凭证后启动：./server -c config.yaml
+#
+# ⚠️ 安全启动护栏：jwt.secret / security.channel_key_aes_key / admin.password
+# 三项若仍为内置默认值或留空，进程会拒绝启动（切断「默认部署即被接管」）。
+#
+# 生成强随机凭证（Git Bash / Linux / macOS 均可）：
+#   jwt.secret          →  openssl rand -hex 32
+#   channel_key_aes_key →  openssl rand -hex 16   # 32 个十六进制字符 = 32 字节，AES-256
+#   admin.password      →  openssl rand -base64 18
+
+server:
+  port: 8080                # 监听端口
+  # 可信反向代理的 IP/CIDR 列表。只有请求确实来自其中之一时，才采信 X-Forwarded-For / X-Real-IP
+  # 作为客户端 IP（写入请求日志/审计/操作日志的 client_ip，并作为登录限流的键）。
+  # 缺省为空：一律只信 TCP 对端地址。前置 Nginx/Caddy 部署【必须】填上代理地址，
+  # 否则反代后面的所有用户共享同一个登录限流桶，任何人打满阈值就能把全站登录锁死。
+  # trusted_proxies: ["127.0.0.1", "10.0.0.0/8"]
+
+database:
+  driver: sqlite            # sqlite（默认）/ mysql / postgres
+  dsn: data/saig.db         # SQLite 为文件路径；MySQL/PG 为标准连接串
+  max_open_conns: 0         # 连接池：最大打开连接数（0 = 驱动默认）
+  max_idle_conns: 0
+  conn_max_lifetime: 0
+
+redis:                      # 可选。单实例无需开启（内存实现功能不降级）
+  enabled: false
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+admin:
+  username: admin           # 首次启动播种的超管账号
+  password: "__CHANGE_ME__" # 【必改】仅首次播种生效，之后在后台改密；须 8~64 字符，留占位符拒启
+
+jwt:
+  secret: "__CHANGE_ME__"   # 【必改】管理后台 JWT 签名密钥，强随机值且不少于 32 字节（openssl rand -hex 32）；留占位符拒启
+  expire_hours: 24
+
+security:
+  apikey_prefix: sk-saig    # 业务令牌前缀
+  # 【必改】渠道上游 Key 的 AES 加密密钥，长度必须为 16/24/32 字节。
+  # ⚠️ 一旦有数据后不可再换（换了旧密文解不开），务必妥善保管。
+  channel_key_aes_key: "__CHANGE_ME_TO_16_24_OR_32_BYTES__"
+  # login_rate_limit: 10                             # 登录/注册匿名端点 每IP每分钟次数，缺省 10
+  # v1_auth_fail_limit: 30                           # /v1 每IP每分钟鉴权失败上限，达限后该IP本分钟直接 429（不查库）；<=0 关闭
+  # login_user_fail_limit: 5                         # 同一用户名每分钟登录失败上限（跨IP合计，防分布式爆破），达限后本分钟 429；<=0 关闭
+  # upstream_block_private: false                   # 渠道出站是否拒绝回环/私网地址（防 SSRF 打内网）；渠道全是公网上游时建议开启。云元数据地址始终拒绝
+  # default_app_concurrency: 20                     # 应用未设并发上限（0）时的同时在途请求上限，封顶配额并发超额；<=0 表示未设置的应用不限；单个应用设 -1 可单独放开
+  # default_key_rpm: 600                             # 令牌未设 RPM（0）时的兜底每分钟上限；<=0 表示未设 RPM 的令牌不限流；单个令牌设 -1 可单独放开
+  # anthropic_official_hosts: ["api.anthropic.com"]  # anthropic auto 鉴权分流域名单（命中→x-api-key，未命中→both 双发）
+
+# 熔断/重试（缺省即现状值，可留空整块）
+resilience:
+  breaker:
+    channel: {window: 30s, cooldown: 60s, fail_threshold: 5, error_rate: 0.5, min_samples: 20, probe_backoff_max: 8, recover_factor: 0.3}
+    account: {window: 30s, cooldown: 60s, fail_threshold: 3, error_rate: 0.5, min_samples: 10, probe_backoff_max: 8, recover_factor: 0.3}
+    proxy:   {window: 30s, cooldown: 60s, fail_threshold: 3, error_rate: 0.5, min_samples: 10, probe_backoff_max: 8, recover_factor: 0.3}
+  retry:
+    max_wall: 30s
+  # 主动探测器：定时探半开渠道的 /models 让其恢复(补低流量渠道自愈)。缺省即下值。
+  probe: {enabled: true, interval: 30s, concurrency: 8, timeout: 10s}
+  # 账号×模型配额冷却指数退避（P12a）。缺省即下值。
+  account_model_backoff: {base: 1m, max: 30m}
+
+# 进程日志（业务面请求记录走 RequestLog 表，与此无关）。缺省即下值。
+# level=debug 时额外保留 gin 的调试路由表输出（开发场景）。
+log:
+  level: info               # debug / info / warn / error
+  format: text              # text（人读）/ json（对接 Loki/ELK 等采集）
+  output: stderr            # stderr / stdout / 文件路径（append 写入，轮转交给 logrotate/容器）
+
+# 告警最小版：一个 webhook + 高信噪事件(全候选失败/扣费失败) + TTL 去重。缺省关闭。
+alert:
+  enabled: false
+  webhook_url: ""          # 飞书/钉钉/Slack/自建接收端的 incoming webhook
+  format: generic          # generic | slack | feishu | dingtalk
+  dedup_window: 5m
+
+# 取证审计异步写缓冲（可选；缺省 256 条 / 0 不截断 / 4 个写 worker）。
+# 高并发下缓冲满会丢弃新审计条目（保请求主链路），按流量调大 buffer_size。
+#audit:
+#  buffer_size: 256      # 异步写缓冲队列长度
+#  max_body_bytes: 0     # 单条审计正文截断上限（字节）；0=不截断（默认，取证完整优先），内存/磁盘紧张时可设如 1048576；流式响应另有 64 MiB 在途硬上限
+#  workers: 4            # 后台写 worker 数（缺省 4）；正文经存储层落盘/上传（S3 每条两次 Put），并发不足会缓冲溢出
+
+# 审计正文存储（可选；缺省 local）。请求体/响应体不再进数据库，gzip 后写入下列后端；
+# 数据库只留对象 key 与取证元数据（大小/SHA-256/截断标记）。
+# 多实例部署必须用 s3（local 不跨节点：节点 A 的详情页读不到节点 B 落盘的正文）。
+#storage:
+#  type: local            # local | s3
+#  local:
+#    root: data/audit     # 本地根目录（与 SQLite 同级，目录 0700 / 文件 0600）
+#  s3:
+#    endpoint: s3.amazonaws.com   # 不带协议；MinIO/R2/OSS/COS 填各自 endpoint
+#    bucket: saig-audit           # 须预先创建，启动时探活，桶不存在则拒启
+#    region: us-east-1
+#    access_key: ""               # 留空走 IAM / AWS_* 环境变量 / ~/.aws/credentials 凭证链
+#    secret_key: ""
+#    use_ssl: true
+#    path_style: false            # MinIO/自建通常 true
+#    prefix: ""                   # 可选，对象 key 前缀（如 prod）
+
+# 请求日志写入（可选；缺省同步落库）。async_buffer>0 启用异步缓冲，
+# 高并发降低每请求一次同步 INSERT；代价是崩溃丢缓冲、缓冲满丢弃（有告警日志）。
+#request_log:
+#  async_buffer: 0
+
+# 会话粘连 TTL（可选；缺省 5m/10m）。
+#session:
+#  sticky_ttl: 5m
+#  channel_sticky_ttl: 10m
+
+# 后台任务周期（可选；缺省 1m/6h）。
+#jobs:
+#  usage_aggregate_interval: 1m
+#  cleanup_interval: 6h

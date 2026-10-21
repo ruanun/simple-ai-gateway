@@ -1,0 +1,21 @@
+# 构建上下文瘦身：运行镜像用不到的目录一律排除
+.git/
+.github/
+data/
+docs/
+logs/
+reference/
+tools/
+web/node_modules/
+web/dist/
+*.exe
+# 本地二进制产物（/server 锚定仓库根，不影响 cmd/server/ 源码目录）
+/server
+/bin/
+/build/
+*.db
+*.log
+# 本地配置绝不烘进镜像（运行时挂载 /app/config.yaml）
+config.yaml
+config.local.yaml
+.env

@@ -1,0 +1,140 @@
+# push/PR 验证：前端构建（产出 web/dist 供 go:embed）→ Go 测试/漏洞扫描/多方言集成/lint/工作流校验。
+# 注意顺序不可颠倒：干净 checkout 缺 web/dist 时 go build/test 直接编译失败，故各 Go job 复用 web artifact。
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 前端 lint + 构建
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm test
+          pnpm build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  verify:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Go 静态检查与测试
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Go 漏洞扫描（govulncheck）
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  lint:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=8m
+
+  integration:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: saigtest
+          MYSQL_DATABASE: saig
+        ports: ['13306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -psaigtest"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: saigtest
+          POSTGRES_DB: saig
+        ports: ['15432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: 多方言迁移实测（MySQL / PostgreSQL）
+        env:
+          TEST_MYSQL_DSN: root:saigtest@tcp(127.0.0.1:13306)/saig?charset=utf8mb4&parseTime=True&loc=Local
+          TEST_PG_DSN: host=127.0.0.1 port=15432 user=postgres password=saigtest dbname=saig sslmode=disable
+          TEST_REDIS_ADDR: 127.0.0.1:16379
+        run: go test ./internal/db/ -run TestMigrateDialect -v
+
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Shell 语法检查
+        run: bash -n scripts/build.sh scripts/docker-build.sh

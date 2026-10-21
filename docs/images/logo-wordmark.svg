@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 64" width="360" height="64" role="img" aria-label="simple-ai-gateway">
+  <g stroke="#2563eb" stroke-width="4.5" stroke-linecap="round" fill="none">
+    <path d="M18 32 C 30 32, 33 16, 44 16"/>
+    <path d="M18 32 H 44"/>
+    <path d="M18 32 C 30 32, 33 48, 44 48"/>
+  </g>
+  <g fill="#2563eb">
+    <circle cx="16" cy="32" r="6"/>
+    <circle cx="46" cy="16" r="5"/>
+    <circle cx="46" cy="32" r="5"/>
+    <circle cx="46" cy="48" r="5"/>
+  </g>
+  <text x="82" y="41" font-family="'Fira Code', ui-monospace, SFMono-Regular, monospace" font-size="23" font-weight="600" letter-spacing="-0.5" fill="#1e293b">simple-ai-gateway</text>
+</svg>

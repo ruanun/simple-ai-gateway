@@ -1,0 +1,18 @@
+# gitleaks 配置：在默认规则集之上，仅放行仓库内公开的**测试夹具**密钥。
+#
+# 这些值是单元测试与文档示例里的固定假密钥（AES-256 测试密钥 / 占位符），
+# 不是任何环境使用过的真实凭证。真实凭证从未入库：config.yaml、config.local.yaml、
+# .env、data/ 均被 .gitignore 排除，且全历史扫描只命中下列固定串。
+#
+# 新增白名单必须满足：值本身公开、可被任何人看到、与生产凭证无关。
+# 不要为了“让扫描变绿”而放行 config.local.yaml / .env / 真实 key 所在的路径。
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "仓库内公开的测试夹具密钥（非真实凭证）"
+regexes = [
+  '''0123456789abcdef0123456789abcdef''',  # internal/config/config.go defaultAESKey 等
+  '''fedcba9876543210fedcba9876543210''',  # AES 测试密钥
+  '''AZ0123456789abcdefXYZ''',              # 加解密测试输入
+]

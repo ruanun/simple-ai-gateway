@@ -1,0 +1,45 @@
+# 最小可用编排：数据落 named volume（避免 bind mount 与非 root 用户的宿主权限问题）。
+# 必读：config 挂载行默认注释；不挂载会因内置默认凭证被启动护栏拒绝。
+# 自定义配置：解开 config.yaml 挂载行；多实例部署：解开 redis 块并在 config.yaml 开启 redis。
+services:
+  saig:
+    build:
+      context: .
+      # 构建元数据透传给 Dockerfile 的同名 ARG。.dockerignore 排除了 .git，镜像内无法回退到
+      # VCS 戳记，不传就只能落到 Dockerfile 的默认值（dev/unknown/unknown），启动横幅与
+      # --version 就核对不出线上跑的是哪份代码。三项都有缺省值，裸跑 docker compose build
+      # 不会报错，只是信息缺失——想带上版本信息用：
+      #   sh scripts/docker-build.sh          （自动取 git 短号与当前 UTC 时刻，含脏标记）
+      # 或手动：
+      #   VERSION=v0.1.0 COMMIT=$(git rev-parse --short=12 HEAD) \
+      #   BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose build
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    # GHCR 镜像替代本地构建（多架构 linux/amd64 + linux/arm64）。
+    # 公开仓库首次发布后，需到 GitHub Packages 设置把 package 可见性改为 public：
+    # image: ghcr.io/ruanun/simple-ai-gateway:latest
+    ports:
+      # 默认只绑回环：生产入口应由前置 HTTPS 反代接管（见 docs/部署指南.md · 反向代理）。
+      # 需要容器直接对外时改为 "8080:8080"。
+      - "127.0.0.1:8080:8080"
+    environment:
+      # 容器默认 UTC；日成本限额/用量聚合按本地日期切日，跨时区部署务必设置 TZ
+      - TZ=Asia/Shanghai
+    volumes:
+      - saig-data:/app/data
+      # - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+
+  # 单实例不需要 Redis（限流/熔断走进程内存实现，功能不降级）。
+  # 打开后需在挂载的 config.yaml 中设置：redis: { enabled: true, addr: "redis:6379" }
+  # redis:
+  #   image: redis:7-alpine
+  #   volumes:
+  #     - redis-data:/data
+  #   restart: unless-stopped
+
+volumes:
+  saig-data:
+  # redis-data:

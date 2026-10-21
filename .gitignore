@@ -1,0 +1,47 @@
+# 二进制产物
+/simple-ai-gateway
+*.exe
+/bin/
+/build/
+
+# 内嵌前端的构建产物（由 scripts/build.sh / Dockerfile 在构建时生成，不入库）
+/web/dist/
+/web/node_modules/
+
+# SQLite 数据文件（默认零依赖模式落盘于此）
+/data/
+*.db
+
+# 日志
+/logs/
+*.log
+
+# 本地配置与密钥（模板 config.example.yaml 照常入库；填了真凭证的一律不入库）
+/config.yaml
+config.local.yaml
+.env
+
+/reference/
+
+# Claude Code 本地个人设置（权限白名单等，因人而异，不入库；共享设置放 settings.json）
+.claude/settings.local.json
+
+# 内部工作文档（路线图、安全审查档案、各阶段设计 spec/plan），仅本地保留不入库
+/docs/roadmap.md
+/docs/security/
+/docs/superpowers/
+
+# 本地 AI 助手/代理工作目录（因工具而异，不入库）
+.agents/
+.superpowers/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+.gocache_tmp/
+**/node_modules/
+**/dist/
+/dist/

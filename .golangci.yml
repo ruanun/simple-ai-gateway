@@ -1,0 +1,17 @@
+# 保守起步：先启用低误报、与既有代码兼容的检查；存量清理后再逐步加 staticcheck/errcheck/gosec。
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - unused
+    - misspell
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
